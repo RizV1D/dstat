@@ -1,0 +1,20 @@
+[
+    {
+        "name": "CloudFlare For Custom Rule",
+        "url": "https://cantdown.milik-irfan.tech/nginx_status",
+        "isMonitoring": false
+    },
+    {
+        "name": "Vshield",
+        "url": "https://graph.vshield.pro/7VTnnXWvhdVeUC6q",
+        "isMonitoring": false
+    },
+    {
+        "name": "Custom Waf",
+        "url": "https://kygtps.live/nginx_status",
+        "isMonitoring": false,
+        "totalRequests": 0,
+        "maxRequestsPerSecond": 0,
+        "lastRequestCount": 0
+    }
+]
