@@ -9,7 +9,8 @@ const width = 800;
 const height = 600;
 const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height });
 
-const activeUsers = new Map(); // Menyimpan userId yang sedang monitoring
+// Track active users monitoring
+const activeUsers = new Set();
 
 async function fetchVShieldRequests() {
     try {
@@ -76,16 +77,10 @@ async function generateChart(dataArray) {
 }
 
 async function monitorServer(chatId, userId, username, fetchFunction, label) {
-    if (activeUsers.has(userId)) {
-        const inUseMessage = await bot.sendMessage(chatId, 'You already have a monitoring session running. Please wait until it finishes.');
-        setTimeout(() => bot.deleteMessage(chatId, inUseMessage.message_id), 5000);
-        return;
-    }
-
-    activeUsers.set(userId, true);
+    activeUsers.add(userId);
 
     const requestData = [];
-    const startRequest = await fetchFunction();
+    const startRequest = await fetchFunction(); 
     const endTime = Date.now() + 140 * 1000;
 
     while (Date.now() < endTime) {
@@ -132,6 +127,12 @@ bot.on('callback_query', async (query) => {
     const username = query.from.username || 'Anonymous';
 
     if (data === 'vshield') {
+        if (activeUsers.has(userId)) {
+            const inUseMessage = await bot.sendMessage(chatId, 'You already have a monitoring session running. Please wait until it finishes.');
+            setTimeout(() => bot.deleteMessage(chatId, inUseMessage.message_id), 5000);
+            return;
+        }
+
         await bot.sendMessage(chatId,
             'Server Name: <b>🏝️Vshield🏝️</b>\n' +
             '<b>Statistics have started</b>\n' +
@@ -140,9 +141,16 @@ bot.on('callback_query', async (query) => {
             '<b>Statistics Duration:</b> 140s',
             { parse_mode: 'HTML' }
         );
+
         await monitorServer(chatId, userId, username, fetchVShieldRequests, 'VShield');
 
     } else if (data === 'fdcservers') {
+        if (activeUsers.has(userId)) {
+            const inUseMessage = await bot.sendMessage(chatId, 'You already have a monitoring session running. Please wait until it finishes.');
+            setTimeout(() => bot.deleteMessage(chatId, inUseMessage.message_id), 5000);
+            return;
+        }
+
         await bot.sendMessage(chatId,
             'Server Name: <b>🛰️FDCServers🛰️</b>\n' +
             '<b>Statistics have started</b>\n' +
@@ -151,6 +159,7 @@ bot.on('callback_query', async (query) => {
             '<b>Statistics Duration:</b> 140s',
             { parse_mode: 'HTML' }
         );
+
         await monitorServer(chatId, userId, username, fetchFDCRequests, 'FDCServers');
 
     } else if (data === 'layer4') {
