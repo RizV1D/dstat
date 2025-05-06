@@ -9,8 +9,13 @@ const width = 800;
 const height = 600;
 const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height });
 
-// Track active users monitoring
+// Per pengguna tracking
 const activeUsers = new Set();
+// Per server tracking
+const serverInUse = {
+    VShield: false,
+    FDCServers: false,
+};
 
 async function fetchVShieldRequests() {
     try {
@@ -78,6 +83,7 @@ async function generateChart(dataArray) {
 
 async function monitorServer(chatId, userId, username, fetchFunction, label) {
     activeUsers.add(userId);
+    serverInUse[label] = true;
 
     const requestData = [];
     const startRequest = await fetchFunction(); 
@@ -118,6 +124,7 @@ Thanks for using <b>Silly Cat Dstat</b> ❤️
     });
 
     activeUsers.delete(userId);
+    serverInUse[label] = false;
 }
 
 bot.on('callback_query', async (query) => {
@@ -126,43 +133,39 @@ bot.on('callback_query', async (query) => {
     const userId = query.from.id;
     const username = query.from.username || 'Anonymous';
 
-    if (data === 'vshield') {
+    if (data === 'vshield' || data === 'fdcservers') {
+        const label = data === 'vshield' ? 'VShield' : 'FDCServers';
+        const fetchFunction = data === 'vshield' ? fetchVShieldRequests : fetchFDCRequests;
+        const target = data === 'vshield'
+            ? 'https://graph.vshield.pro/7VTnnXWvhdVeUC6q'
+            : 'http://198.16.110.165/nginx_status';
+        const protection = data === 'vshield' ? 'Vshield' : 'Nginx Basic';
+
         if (activeUsers.has(userId)) {
-            const inUseMessage = await bot.sendMessage(chatId, 'You already have a monitoring session running. Please wait until it finishes.');
-            setTimeout(() => bot.deleteMessage(chatId, inUseMessage.message_id), 5000);
+            const msg = await bot.sendMessage(chatId, 'You already have a monitoring session running. Please wait until it finishes.');
+            setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
+            return;
+        }
+
+        if (serverInUse[label]) {
+            const msg = await bot.sendMessage(chatId, `${label} server is currently in use. Please wait until it is available.`);
+            setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
             return;
         }
 
         await bot.sendMessage(chatId,
-            'Server Name: <b>🏝️Vshield🏝️</b>\n' +
+            `Server Name: <b>${label === 'VShield' ? '🏝️Vshield🏝️' : '🛰️FDCServers🛰️'}</b>\n` +
             '<b>Statistics have started</b>\n' +
-            '<b>Target:</b> <code>https://graph.vshield.pro/7VTnnXWvhdVeUC6q</code>\n' +
-            '<b>Protection Type:</b> Vshield\n' +
+            `<b>Target:</b> <code>${target}</code>\n` +
+            `<b>Protection Type:</b> ${protection}\n` +
             '<b>Statistics Duration:</b> 140s',
             { parse_mode: 'HTML' }
         );
 
-        await monitorServer(chatId, userId, username, fetchVShieldRequests, 'VShield');
+        await monitorServer(chatId, userId, username, fetchFunction, label);
+    }
 
-    } else if (data === 'fdcservers') {
-        if (activeUsers.has(userId)) {
-            const inUseMessage = await bot.sendMessage(chatId, 'You already have a monitoring session running. Please wait until it finishes.');
-            setTimeout(() => bot.deleteMessage(chatId, inUseMessage.message_id), 5000);
-            return;
-        }
-
-        await bot.sendMessage(chatId,
-            'Server Name: <b>🛰️FDCServers🛰️</b>\n' +
-            '<b>Statistics have started</b>\n' +
-            '<b>Target:</b> <code>http://198.16.110.165/nginx_status</code>\n' +
-            '<b>Protection Type:</b> Nginx Basic\n' +
-            '<b>Statistics Duration:</b> 140s',
-            { parse_mode: 'HTML' }
-        );
-
-        await monitorServer(chatId, userId, username, fetchFDCRequests, 'FDCServers');
-
-    } else if (data === 'layer4') {
+    else if (data === 'layer4') {
         await bot.editMessageText('coming soon.', {
             chat_id: chatId,
             message_id: query.message.message_id,
