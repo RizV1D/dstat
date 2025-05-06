@@ -10,26 +10,22 @@ const width = 800;
 const height = 600;
 const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height });
 
-const activeUsers = new Set();
-const serverInUse = {
+const serverStatus = {
     VShield: false,
-    FDCServers: false,
+    FDCServers: false
 };
 
-// ===== FETCH FUNCTIONS =====
 async function fetchVShieldRequests() {
     try {
         const { data } = await axios.get('https://graph.vshield.pro/7VTnnXWvhdVeUC6q', {
             timeout: 5000,
             httpsAgent: new https.Agent({ rejectUnauthorized: false }),
         });
-
         if (typeof data === 'string') {
             const parts = data.trim().split(/\s+/);
             const totalRequests = parseInt(parts[parts.length - 1].replace(/\D/g, ''), 10);
             return isNaN(totalRequests) ? 0 : totalRequests;
         }
-
         return typeof data === 'number' ? data : 0;
     } catch (error) {
         console.error('Error fetching VShield data:', error.message);
@@ -42,12 +38,10 @@ async function fetchFDCRequests() {
         const { data } = await axios.get('http://198.16.110.165/nginx_status', {
             timeout: 5000
         });
-
         const lines = data.split('\n');
         const requestsLine = lines.find(line => line.includes('requests'));
         const parts = requestsLine.trim().split(/\s+/);
         const totalRequests = parseInt(parts[2]);
-
         return isNaN(totalRequests) ? 0 : totalRequests;
     } catch (error) {
         console.error('Error fetching FDCServers data:', error.message);
@@ -55,7 +49,6 @@ async function fetchFDCRequests() {
     }
 }
 
-// ===== CHART GENERATOR =====
 async function generateChart(dataArray) {
     const labels = Array.from({ length: dataArray.length }, (_, i) => `${i + 1}`);
     const chartConfig = {
@@ -65,8 +58,8 @@ async function generateChart(dataArray) {
             datasets: [{
                 label: 'Total Requests',
                 data: dataArray,
-                borderColor: 'rgba(255, 99, 132, 1)',
-                backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                borderColor: 'rgba(54, 162, 235, 1)',
+                backgroundColor: 'rgba(54, 162, 235, 0.2)',
                 fill: true,
             }],
         },
@@ -76,33 +69,29 @@ async function generateChart(dataArray) {
             },
         },
     };
-
     return await chartJSNodeCanvas.renderToBuffer(chartConfig);
 }
 
-// ===== MONITOR FUNCTION =====
-async function monitorServer(chatId, userId, username, fetchFunction, label) {
-    activeUsers.add(userId);
-    serverInUse[label] = true;
+async function monitorServer(chatId, username, fetchFunction, label) {
+    if (serverStatus[label]) {
+        const msg = await bot.sendMessage(chatId, `${label} sedang digunakan, tunggu sampai selesai.`);
+        setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
+        return;
+    }
+
+    serverStatus[label] = true;
 
     const requestData = [];
-    const requestDataHistory = [];
-
-    const startRequest = await fetchFunction();
-    requestDataHistory.push(startRequest);
+    let prevValue = await fetchFunction();
 
     const endTime = Date.now() + 140 * 1000;
 
     while (Date.now() < endTime) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        const currentRequest = await fetchFunction();
-        requestDataHistory.push(currentRequest);
-
-        const previous = requestDataHistory[requestDataHistory.length - 2];
-        const delta = currentRequest - previous;
-
-        requestData.push(Math.max(0, delta));
+        await new Promise(res => setTimeout(res, 1000));
+        const currentValue = await fetchFunction();
+        const delta = Math.max(0, currentValue - prevValue);
+        requestData.push(delta);
+        prevValue = currentValue;
     }
 
     const total = requestData.reduce((a, b) => a + b, 0);
@@ -123,7 +112,7 @@ Stats during 140 seconds:
 ➥ Peak Requests  : <b>${max.toLocaleString()}</b>
 ➥ Min Requests   : <b>${min.toLocaleString()}</b>
 
-Thanks for using <b>Silly Cat Dstat</b> ❤️
+Thanks for using <b>Silly Cat Dstat</b>
 🚗 ${userLink} 🚗
     `;
 
@@ -132,28 +121,17 @@ Thanks for using <b>Silly Cat Dstat</b> ❤️
         parse_mode: 'HTML',
     });
 
-    activeUsers.delete(userId);
-    serverInUse[label] = false;
+    serverStatus[label] = false;
 }
 
-// ===== CALLBACK HANDLER =====
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
-    const userId = query.from.id;
-    const username = query.from.username || 'Anonymous';
     const data = query.data;
-
-    if (activeUsers.has(userId)) {
-        const msg = await bot.sendMessage(chatId, 'You are already running a monitoring session. Please wait until it finishes.');
-        setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
-        return;
-    }
+    const username = query.from.username || 'Anonymous';
 
     if (data === 'vshield') {
-        if (serverInUse.VShield) {
-            const msg = await bot.sendMessage(chatId, 'VShield is currently in use by another user.');
-            setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
-            return;
+        if (serverStatus['VShield']) {
+            return bot.sendMessage(chatId, 'VShield sedang digunakan. Tunggu hingga selesai.');
         }
 
         await bot.sendMessage(chatId,
@@ -164,13 +142,10 @@ bot.on('callback_query', async (query) => {
             '<b>Statistics Duration:</b> 140s',
             { parse_mode: 'HTML' }
         );
-        await monitorServer(chatId, userId, username, fetchVShieldRequests, 'VShield');
-
+        await monitorServer(chatId, username, fetchVShieldRequests, 'VShield');
     } else if (data === 'fdcservers') {
-        if (serverInUse.FDCServers) {
-            const msg = await bot.sendMessage(chatId, 'FDCServers is currently in use by another user.');
-            setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
-            return;
+        if (serverStatus['FDCServers']) {
+            return bot.sendMessage(chatId, 'FDCServers sedang digunakan. Tunggu hingga selesai.');
         }
 
         await bot.sendMessage(chatId,
@@ -181,10 +156,11 @@ bot.on('callback_query', async (query) => {
             '<b>Statistics Duration:</b> 140s',
             { parse_mode: 'HTML' }
         );
-        await monitorServer(chatId, userId, username, fetchFDCRequests, 'FDCServers');
-
+        await monitorServer(chatId, username, fetchFDCRequests, 'FDCServers');
+    } else if (data === 'back') {
+        await sendMainMenu(chatId, query.message.message_id);
     } else if (data === 'layer4') {
-        await bot.editMessageText('coming soon.', {
+        await bot.editMessageText('Coming soon.', {
             chat_id: chatId,
             message_id: query.message.message_id,
             reply_markup: { inline_keyboard: [[{ text: '<< Back', callback_data: 'back' }]] },
@@ -203,12 +179,6 @@ bot.on('callback_query', async (query) => {
                 ],
             },
         });
-    } else if (data === 'protect') {
-        await bot.editMessageText('coming soon', {
-            chat_id: chatId,
-            message_id: query.message.message_id,
-            reply_markup: { inline_keyboard: [[{ text: '<< Back', callback_data: 'back' }]] },
-        });
     } else if (data === 'non_protect') {
         await bot.editMessageText('Select the server menu📊', {
             chat_id: chatId,
@@ -223,15 +193,18 @@ bot.on('callback_query', async (query) => {
                 ],
             },
         });
-    } else if (data === 'back') {
-        await sendMainMenu(chatId, query.message.message_id);
+    } else if (data === 'protect') {
+        await bot.editMessageText('Coming soon.', {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+            reply_markup: { inline_keyboard: [[{ text: '<< Back', callback_data: 'back' }]] },
+        });
     }
 });
 
-// ===== MAIN MENU =====
 async function sendMainMenu(chatId, messageId) {
     await bot.editMessageText(
-        'Welcome to <b>Silly Cat Dstat</b> 🐱📊! Choose the type of Dstat to view and stay updated with real-time statistics.',
+        'Welcome to <b>Silly Cat Dstat</b> 🐱📊! Choose the type of Dstat to view and stay updated with real-time statistics. Whether it’s for <i>Layer 4</i> or <i>Layer 7</i>, we’ve got you covered!',
         {
             chat_id: chatId,
             message_id: messageId,
@@ -248,7 +221,6 @@ async function sendMainMenu(chatId, messageId) {
     );
 }
 
-// ===== START COMMAND =====
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     await bot.sendMessage(
