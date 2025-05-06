@@ -10,6 +10,7 @@ const height = 600;
 const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height });
 
 let vshieldInUse = false;
+let fdcserversInUse = false;
 
 async function fetchVShieldRequests() {
     try {
@@ -25,7 +26,25 @@ async function fetchVShieldRequests() {
         }
         return typeof data === 'number' ? data : 0;
     } catch (error) {
-        console.error('Error fetching data:', error.message);
+        console.error('Error fetching VShield data:', error.message);
+        return 0;
+    }
+}
+
+async function fetchFDCRequests() {
+    try {
+        const { data } = await axios.get('http://198.16.110.165/nginx_status', {
+            timeout: 5000
+        });
+
+        const lines = data.split('\n');
+        const requestsLine = lines.find(line => line.includes('requests'));
+        const parts = requestsLine.trim().split(/\s+/);
+        const totalRequests = parseInt(parts[2]);
+
+        return isNaN(totalRequests) ? 0 : totalRequests;
+    } catch (error) {
+        console.error('Error fetching FDCServers data:', error.message);
         return 0;
     }
 }
@@ -41,17 +60,15 @@ async function generateChart(dataArray) {
                 {
                     label: 'Total Requests',
                     data: dataArray,
-                    borderColor: 'rgba(75, 192, 192, 1)',
-                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    borderColor: 'rgba(255, 99, 132, 1)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
                     fill: true,
                 },
             ],
         },
         options: {
             scales: {
-                y: {
-                    beginAtZero: true,
-                },
+                y: { beginAtZero: true }
             },
         },
     };
@@ -59,128 +76,91 @@ async function generateChart(dataArray) {
     return await chartJSNodeCanvas.renderToBuffer(chartConfig);
 }
 
-async function monitorRequests(chatId, username) {
-    if (vshieldInUse) {
-        const inUseMessage = await bot.sendMessage(chatId, 'The server is in use, please wait');
-        setTimeout(async () => {
-            await bot.deleteMessage(chatId, inUseMessage.message_id);
-        }, 5000);
+async function monitorServer(chatId, username, fetchFunction, label) {
+    const inUseFlag = label === 'VShield' ? 'vshieldInUse' : 'fdcserversInUse';
+    if ((label === 'VShield' && vshieldInUse) || (label === 'FDCServers' && fdcserversInUse)) {
+        const inUseMessage = await bot.sendMessage(chatId, `${label} is in use, please wait`);
+        setTimeout(() => bot.deleteMessage(chatId, inUseMessage.message_id), 5000);
         return;
     }
 
-    vshieldInUse = true;
+    if (label === 'VShield') vshieldInUse = true;
+    if (label === 'FDCServers') fdcserversInUse = true;
+
     const requestData = [];
+    const startRequest = await fetchFunction(); // base for delta calc
     const endTime = Date.now() + 140 * 1000;
 
     while (Date.now() < endTime) {
-        const requests = await fetchVShieldRequests();
-        if (requests > 0) {
-            requestData.push(requests);
-        } else {
-            console.log('Invalid or zero requests received, skipping.');
-        }
+        const currentRequest = await fetchFunction();
+        const delta = currentRequest - (requestData.length === 0 ? startRequest : startRequest + requestData.reduce((a, b) => a + b, 0));
+        requestData.push(Math.max(0, delta));
         await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    if (requestData.length === 0) {
-        await bot.sendMessage(chatId, 'Tidak ada data requests yang valid selama 60 detik terakhir.');
-        vshieldInUse = false;
-        return;
-    }
+    const total = requestData.reduce((a, b) => a + b, 0);
+    const max = Math.max(...requestData);
+    const min = Math.min(...requestData);
+    const chart = await generateChart(requestData);
 
-    const totalRequests = requestData.reduce((a, b) => a + b, 0);
-    const maxRequests = Math.max(...requestData);
-    const minRequests = Math.min(...requestData);
-    const chartImage = await generateChart(requestData);
-
+    const now = new Date();
+    const dateStr = now.toISOString().replace('T', ' ').split('.')[0];
     const userLink = username ? `<a href="https://t.me/${username}">${username}</a>` : 'Anonymous';
-    const currentDate = new Date();
-    const formattedDate = currentDate.toISOString().replace('T', ' ').split('.')[0];
 
     const caption = `
-Dstat <b>Vshield</b> has been ended
-<b>${formattedDate}</b>
+Dstat <b>${label}</b> has been ended
+<b>${dateStr}</b>
 
 Stats during 140 seconds:
-➥ Total Requests : <b>${totalRequests.toLocaleString()}</b>
-➥ Peak Requests  : <b>${maxRequests.toLocaleString()}</b>
-➥ Min Requests   : <b>${minRequests.toLocaleString()}</b>
+➥ Total Requests : <b>${total.toLocaleString()}</b>
+➥ Peak Requests  : <b>${max.toLocaleString()}</b>
+➥ Min Requests   : <b>${min.toLocaleString()}</b>
 
 Thanks for using <b>Silly Cat Dstat</b> ❤️
-🚗  ${userLink} 🚗
+🚗 ${userLink} 🚗
     `;
 
-    await bot.sendPhoto(chatId, chartImage, {
+    await bot.sendPhoto(chatId, chart, {
         caption: caption.trim(),
         parse_mode: 'HTML',
     });
 
-    vshieldInUse = false;
+    if (label === 'VShield') vshieldInUse = false;
+    if (label === 'FDCServers') fdcserversInUse = false;
 }
 
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const data = query.data;
+    const username = query.from.username || 'Anonymous';
 
     if (data === 'vshield') {
-        if (vshieldInUse) {
-            const inUseMessage = await bot.sendMessage(chatId, 'The server is in use, please wait');
-            setTimeout(async () => {
-                await bot.deleteMessage(chatId, inUseMessage.message_id);
-            }, 5000);
-            return;
-        }
-
-        const username = query.from.username || 'Anonymous';
-
         await bot.sendMessage(chatId,
             'Server Name: <b>🏝️Vshield🏝️</b>\n' +
             '<b>Statistics have started</b>\n' +
-            '<b>Target (Click to copy URL):</b> <code>https://graph.vshield.pro/7VTnnXWvhdVeUC6q</code>\n' +
+            '<b>Target:</b> <code>https://graph.vshield.pro/7VTnnXWvhdVeUC6q</code>\n' +
             '<b>Protection Type:</b> Vshield\n' +
             '<b>Statistics Duration:</b> 140s',
             { parse_mode: 'HTML' }
         );
-        await monitorRequests(chatId, username);
+        await monitorServer(chatId, username, fetchVShieldRequests, 'VShield');
 
     } else if (data === 'fdcservers') {
-        const username = query.from.username || 'Anonymous';
-
-        try {
-            const { data: nginxData } = await axios.get('http://198.16.110.165/nginx_status', {
-                timeout: 5000
-            });
-
-            const lines = nginxData.split('\n');
-            const requestsLine = lines.find(line => line.includes('requests'));
-            const parts = requestsLine.trim().split(/\s+/);
-            const totalRequests = parseInt(parts[2]);
-
-            const currentTime = new Date().toLocaleString();
-            const userLink = `<a href="https://t.me/${username}">${username}</a>`;
-
-            await bot.sendMessage(chatId,
-                `<b>FDCServers Stats</b>\n` +
-                `📅 <b>${currentTime}</b>\n` +
-                `➥ Total Requests: <b>${totalRequests.toLocaleString()}</b>\n\n` +
-                `Thanks for using <b>Silly Cat Dstat</b>\n` +
-                `🚗 ${userLink} 🚗`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (error) {
-            console.error('Failed to fetch FDCServers stats:', error.message);
-            await bot.sendMessage(chatId, 'Failed to fetch data from FDCServers.');
-        }
+        await bot.sendMessage(chatId,
+            'Server Name: <b>🛰️FDCServers🛰️</b>\n' +
+            '<b>Statistics have started</b>\n' +
+            '<b>Target:</b> <code>http://198.16.110.165/nginx_status</code>\n' +
+            '<b>Protection Type:</b> Nginx Basic\n' +
+            '<b>Statistics Duration:</b> 140s',
+            { parse_mode: 'HTML' }
+        );
+        await monitorServer(chatId, username, fetchFDCRequests, 'FDCServers');
 
     } else if (data === 'layer4') {
         await bot.editMessageText('coming soon.', {
             chat_id: chatId,
             message_id: query.message.message_id,
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '<< Back', callback_data: 'back' }],
-                ],
-            },
+            reply_markup: { inline_keyboard: [[{ text: '<< Back', callback_data: 'back' }]] },
         });
     } else if (data === 'layer7') {
         await bot.editMessageText('Select server below (Layer 7)📊', {
@@ -200,14 +180,10 @@ bot.on('callback_query', async (query) => {
         await bot.editMessageText('coming soon', {
             chat_id: chatId,
             message_id: query.message.message_id,
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '<< Back', callback_data: 'back' }],
-                ],
-            },
+            reply_markup: { inline_keyboard: [[{ text: '<< Back', callback_data: 'back' }]] },
         });
     } else if (data === 'non_protect') {
-        await bot.editMessageText('select the server menu📊', {
+        await bot.editMessageText('Select the server menu📊', {
             chat_id: chatId,
             message_id: query.message.message_id,
             reply_markup: {
@@ -227,7 +203,7 @@ bot.on('callback_query', async (query) => {
 
 async function sendMainMenu(chatId, messageId) {
     await bot.editMessageText(
-        'Welcome to <b>Silly Cat Dstat</b> 🐱📊! Choose the type of Dstat to view and stay updated with real-time statistics. Whether it’s for <i>Layer 4</i> or <i>Layer 7</i>, we’ve got you covered! Let’s start monitoring now!',
+        'Welcome to <b>Silly Cat Dstat</b> 🐱📊! Choose the type of Dstat to view and stay updated with real-time statistics. Whether it’s for <i>Layer 4</i> or <i>Layer 7</i>, we’ve got you covered!',
         {
             chat_id: chatId,
             message_id: messageId,
@@ -246,10 +222,9 @@ async function sendMainMenu(chatId, messageId) {
 
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
-
     await bot.sendMessage(
         chatId,
-        'Welcome to <b>Silly Cat Dstat</b> 🐱📊! Choose the type of Dstat to view and stay updated with real-time statistics. Whether it’s for <i>Layer 4</i> or <i>Layer 7</i>, we’ve got you covered! Let’s start monitoring now!',
+        'Welcome to <b>Silly Cat Dstat</b> 🐱📊! Choose the type of Dstat to view and stay updated with real-time statistics.',
         {
             parse_mode: 'HTML',
             reply_markup: {
