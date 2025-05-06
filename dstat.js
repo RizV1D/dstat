@@ -1,6 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
+const https = require('https');
 
 const token = '7832153548:AAHtXFpby5-qFHejxyW7CplkD90ZLeDKgv0';
 const bot = new TelegramBot(token, { polling: true });
@@ -9,19 +10,18 @@ const width = 800;
 const height = 600;
 const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height });
 
-// Per pengguna tracking
 const activeUsers = new Set();
-// Per server tracking
 const serverInUse = {
     VShield: false,
     FDCServers: false,
 };
 
+// ===== FETCH FUNCTIONS =====
 async function fetchVShieldRequests() {
     try {
         const { data } = await axios.get('https://graph.vshield.pro/7VTnnXWvhdVeUC6q', {
             timeout: 5000,
-            httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+            httpsAgent: new https.Agent({ rejectUnauthorized: false }),
         });
 
         if (typeof data === 'string') {
@@ -29,6 +29,7 @@ async function fetchVShieldRequests() {
             const totalRequests = parseInt(parts[parts.length - 1].replace(/\D/g, ''), 10);
             return isNaN(totalRequests) ? 0 : totalRequests;
         }
+
         return typeof data === 'number' ? data : 0;
     } catch (error) {
         console.error('Error fetching VShield data:', error.message);
@@ -54,22 +55,20 @@ async function fetchFDCRequests() {
     }
 }
 
+// ===== CHART GENERATOR =====
 async function generateChart(dataArray) {
     const labels = Array.from({ length: dataArray.length }, (_, i) => `${i + 1}`);
-
     const chartConfig = {
         type: 'line',
         data: {
             labels,
-            datasets: [
-                {
-                    label: 'Total Requests',
-                    data: dataArray,
-                    borderColor: 'rgba(255, 99, 132, 1)',
-                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
-                    fill: true,
-                },
-            ],
+            datasets: [{
+                label: 'Total Requests',
+                data: dataArray,
+                borderColor: 'rgba(255, 99, 132, 1)',
+                backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                fill: true,
+            }],
         },
         options: {
             scales: {
@@ -81,19 +80,29 @@ async function generateChart(dataArray) {
     return await chartJSNodeCanvas.renderToBuffer(chartConfig);
 }
 
+// ===== MONITOR FUNCTION =====
 async function monitorServer(chatId, userId, username, fetchFunction, label) {
     activeUsers.add(userId);
     serverInUse[label] = true;
 
     const requestData = [];
-    const startRequest = await fetchFunction(); 
+    const requestDataHistory = [];
+
+    const startRequest = await fetchFunction();
+    requestDataHistory.push(startRequest);
+
     const endTime = Date.now() + 140 * 1000;
 
     while (Date.now() < endTime) {
-        const currentRequest = await fetchFunction();
-        const delta = currentRequest - (requestData.length === 0 ? startRequest : startRequest + requestData.reduce((a, b) => a + b, 0));
-        requestData.push(Math.max(0, delta));
         await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const currentRequest = await fetchFunction();
+        requestDataHistory.push(currentRequest);
+
+        const previous = requestDataHistory[requestDataHistory.length - 2];
+        const delta = currentRequest - previous;
+
+        requestData.push(Math.max(0, delta));
     }
 
     const total = requestData.reduce((a, b) => a + b, 0);
@@ -127,45 +136,54 @@ Thanks for using <b>Silly Cat Dstat</b> ❤️
     serverInUse[label] = false;
 }
 
+// ===== CALLBACK HANDLER =====
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
-    const data = query.data;
     const userId = query.from.id;
     const username = query.from.username || 'Anonymous';
+    const data = query.data;
 
-    if (data === 'vshield' || data === 'fdcservers') {
-        const label = data === 'vshield' ? 'VShield' : 'FDCServers';
-        const fetchFunction = data === 'vshield' ? fetchVShieldRequests : fetchFDCRequests;
-        const target = data === 'vshield'
-            ? 'https://graph.vshield.pro/7VTnnXWvhdVeUC6q'
-            : 'http://198.16.110.165/nginx_status';
-        const protection = data === 'vshield' ? 'Vshield' : 'Nginx Basic';
+    if (activeUsers.has(userId)) {
+        const msg = await bot.sendMessage(chatId, 'You are already running a monitoring session. Please wait until it finishes.');
+        setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
+        return;
+    }
 
-        if (activeUsers.has(userId)) {
-            const msg = await bot.sendMessage(chatId, 'You already have a monitoring session running. Please wait until it finishes.');
-            setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
-            return;
-        }
-
-        if (serverInUse[label]) {
-            const msg = await bot.sendMessage(chatId, `${label} server is currently in use. Please wait until it is available.`);
+    if (data === 'vshield') {
+        if (serverInUse.VShield) {
+            const msg = await bot.sendMessage(chatId, 'VShield is currently in use by another user.');
             setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
             return;
         }
 
         await bot.sendMessage(chatId,
-            `Server Name: <b>${label === 'VShield' ? '🏝️Vshield🏝️' : '🛰️FDCServers🛰️'}</b>\n` +
+            'Server Name: <b>🏝️Vshield🏝️</b>\n' +
             '<b>Statistics have started</b>\n' +
-            `<b>Target:</b> <code>${target}</code>\n` +
-            `<b>Protection Type:</b> ${protection}\n` +
+            '<b>Target:</b> <code>https://graph.vshield.pro/7VTnnXWvhdVeUC6q</code>\n' +
+            '<b>Protection Type:</b> Vshield\n' +
             '<b>Statistics Duration:</b> 140s',
             { parse_mode: 'HTML' }
         );
+        await monitorServer(chatId, userId, username, fetchVShieldRequests, 'VShield');
 
-        await monitorServer(chatId, userId, username, fetchFunction, label);
-    }
+    } else if (data === 'fdcservers') {
+        if (serverInUse.FDCServers) {
+            const msg = await bot.sendMessage(chatId, 'FDCServers is currently in use by another user.');
+            setTimeout(() => bot.deleteMessage(chatId, msg.message_id), 5000);
+            return;
+        }
 
-    else if (data === 'layer4') {
+        await bot.sendMessage(chatId,
+            'Server Name: <b>🛰️FDCServers🛰️</b>\n' +
+            '<b>Statistics have started</b>\n' +
+            '<b>Target:</b> <code>http://198.16.110.165/nginx_status</code>\n' +
+            '<b>Protection Type:</b> Nginx Basic\n' +
+            '<b>Statistics Duration:</b> 140s',
+            { parse_mode: 'HTML' }
+        );
+        await monitorServer(chatId, userId, username, fetchFDCRequests, 'FDCServers');
+
+    } else if (data === 'layer4') {
         await bot.editMessageText('coming soon.', {
             chat_id: chatId,
             message_id: query.message.message_id,
@@ -210,9 +228,10 @@ bot.on('callback_query', async (query) => {
     }
 });
 
+// ===== MAIN MENU =====
 async function sendMainMenu(chatId, messageId) {
     await bot.editMessageText(
-        'Welcome to <b>Silly Cat Dstat</b> 🐱📊! Choose the type of Dstat to view and stay updated with real-time statistics. Whether it’s for <i>Layer 4</i> or <i>Layer 7</i>, we’ve got you covered!',
+        'Welcome to <b>Silly Cat Dstat</b> 🐱📊! Choose the type of Dstat to view and stay updated with real-time statistics.',
         {
             chat_id: chatId,
             message_id: messageId,
@@ -229,6 +248,7 @@ async function sendMainMenu(chatId, messageId) {
     );
 }
 
+// ===== START COMMAND =====
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     await bot.sendMessage(
